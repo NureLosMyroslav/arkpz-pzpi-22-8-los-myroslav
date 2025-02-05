@@ -1,0 +1,281 @@
+МІНІСТЕРСТВО ОСВІТИ І НАУКИ УКРАЇНИ
+ХАРКІВСЬКИЙ НАЦІОНАЛЬНИЙ УНІВЕРСИТЕТ РАДІОЕЛЕКТРОНІКИ
+
+Кафедра «Програмної інженерії»
+
+
+
+ЗВІТ
+З Лабораторної роботи №2
+з дисципліни
+«Аналіз та рефакторинг коду»
+
+
+Виконав: 
+ст. гр. ПЗПІ-22-8
+Лось М.О.
+
+Перевірив: 
+ст. викладач кат. ПІ 
+Сокорчук І.П.
+
+
+
+Харків 2024
+
+
+
+2 РОЗРОБКА БАЗИ ДАНИХ ДЛЯ СЕРВЕРНОЇ ЧАСТИНИ ПРОГРАМНОЇ СИСТЕМИ ТА ПРИКЛАДНОГО ПРОГРАМНОГО ІНТЕРФЕЙСУ (API)
+
+2.1	Мета роботи
+Розробити базу даних для серверної частини програмної системи та прикладного програмного інтерфейсу для програмної системи NoiseControl.
+2.2	Хід роботи
+2.2.1	Розробка UML діаграми (Use Case Diagram)
+ 
+Рисунок 2.1 - UML діаграма 
+
+
+
+
+
+2.2.2	Розробка ER-моделі даних (Entity–Relationship Model)
+ 
+Рисунок 2.2 – ER діаграма даних
+
+
+
+
+2.2.4	Створення діаграми структури БД
+ 
+Рисунок 2.3 – діаграма структури БД
+
+2.2.5	Розробити базу даних (БД) програмної системи
+-- Створення таблиці користувачів
+CREATE TABLE Users (
+    id INT IDENTITY(1,1) PRIMARY KEY,
+    username NVARCHAR(50) NOT NULL UNIQUE,
+    email NVARCHAR(100) NOT NULL UNIQUE,
+    created_at DATETIME DEFAULT GETDATE()
+);
+
+-- Створення таблиці зон шуму
+CREATE TABLE NoiseZones (
+    id INT IDENTITY(1,1) PRIMARY KEY,
+    zone_name NVARCHAR(100) NOT NULL UNIQUE,
+    description NVARCHAR(255) NULL
+);
+
+-- Створення таблиці датчиків шуму
+CREATE TABLE Sensors (
+    id INT IDENTITY(1,1) PRIMARY KEY,
+    zone_id INT NOT NULL,
+    sensor_name NVARCHAR(100) NOT NULL UNIQUE,
+    install_date DATETIME DEFAULT GETDATE(),
+    FOREIGN KEY (zone_id) REFERENCES NoiseZones(id) ON DELETE CASCADE
+);
+
+-- Створення таблиці вимірювань рівня шуму
+CREATE TABLE Measurements (
+    id INT IDENTITY(1,1) PRIMARY KEY,
+    sensor_id INT NOT NULL,
+    measured_value DECIMAL(5,2) NOT NULL,
+    measurement_time DATETIME NOT NULL,
+    FOREIGN KEY (sensor_id) REFERENCES Sensors(id) ON DELETE CASCADE
+);
+
+-- Створення таблиці сповіщень
+CREATE TABLE Notifications (
+    id INT IDENTITY(1,1) PRIMARY KEY,
+    measurement_id INT NOT NULL,
+    notification_text NVARCHAR(255) NOT NULL,
+    created_at DATETIME DEFAULT GETDATE(),
+    FOREIGN KEY (measurement_id) REFERENCES Measurements(id) ON DELETE CASCADE
+);
+2.3	Висновки
+У ході роботи була розроблена база даних для серверної частини програмної системи моніторингу шуму в місті. Створена структура бази даних забезпечує ефективне збереження та обробку інформації про міські зони, IoT-датчики шуму, вимірювання рівня шуму та сповіщення.
+База даних дозволяє накопичувати дані про рівень шуму в реальному часі, що є важливим кроком у побудові системи моніторингу акустичного середовища. В подальшому можлива інтеграція функціоналу аналізу перевищень допустимих норм, візуалізації даних у вигляді графіків та автоматичної системи сповіщень для відповідних служб.
+ДОДАТОК А – Функції роботи з БД
+const bcrypt = require('bcryptjs');
+const jwt = require('jsonwebtoken');
+const sql = require('../db');
+const router = require('express').Router();
+
+// Функція для реєстрації нового користувача
+router.post('/register', async (req, res) => {
+    const { username, password, email, role } = req.body;
+
+    if (!username || !password || !email || !role) {
+        return res.status(400).json({ message: 'Всі поля обов\'язкові' });
+    }
+
+    try {
+        const hashedPassword = await bcrypt.hash(password, 10);
+        const query = `INSERT INTO Users (username, password, email, role) VALUES (@username, @password, @email, @role)`;
+        const request = new sql.Request();
+        request.input('username', sql.NVarChar, username);
+        request.input('password', sql.NVarChar, hashedPassword);
+        request.input('email', sql.NVarChar, email);
+        request.input('role', sql.NVarChar, role);
+        await request.query(query);
+
+        res.status(201).json({ message: 'Реєстрація успішна' });
+    } catch (err) {
+        res.status(500).json({ message: `Помилка сервера: ${err.message}` });
+    }
+});
+
+// Функція для авторизації користувача
+router.post('/login', async (req, res) => {
+    const { username, password } = req.body;
+
+    if (!username || !password) {
+        return res.status(400).json({ message: 'Всі поля обов\'язкові' });
+    }
+
+    try {
+        const query = `SELECT id, username, password, role FROM Users WHERE username = @username`;
+        const request = new sql.Request();
+        request.input('username', sql.NVarChar, username);
+        const result = await request.query(query);
+
+        if (result.recordset.length === 0) {
+            return res.status(401).json({ message: 'Невірний логін або пароль' });
+        }
+
+        const user = result.recordset[0];
+
+        const isPasswordValid = await bcrypt.compare(password, user.password);
+        if (!isPasswordValid) {
+            return res.status(401).json({ message: 'Невірний логін або пароль' });
+        }
+
+        res.json({ message: 'Авторизація успішна' });
+    } catch (err) {
+        res.status(500).json({ message: `Помилка сервера: ${err.message}` });
+    }
+});
+
+module.exports = router;
+ДОДАТОК Б – Код для взаємодії серверної частини з БД
+const express = require('express');
+const bcrypt = require('bcryptjs');
+const sql = require('../db');
+const router = express.Router();
+
+// Ініціалізація роутера для обробки запитів
+
+/**
+ * @swagger
+ * /api/register:
+ *   post:
+ *     summary: Реєстрація нового користувача
+ *     tags: [Auth]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               username:
+ *                 type: string
+ *               password:
+ *                 type: string
+ *               email:
+ *                 type: string
+ *               role:
+ *                 type: string
+ *     responses:
+ *       201:
+ *         description: Реєстрація успішна
+ */
+// Обробка запиту на реєстрацію нового користувача
+router.post('/register', async (req, res) => {
+    const { username, password, email, role } = req.body;
+
+    // Перевірка, чи всі необхідні поля заповнені
+    if (!username || !password || !email || !role) {
+        return res.status(400).json({ message: 'Всі поля обов\'язкові' });
+    }
+
+    try {
+        // Хешування пароля перед збереженням у базі даних
+        const hashedPassword = await bcrypt.hash(password, 10);
+        const query = `INSERT INTO Users (username, password, email, role) VALUES (@username, @password, @email, @role)`;
+        const request = new sql.Request();
+        request.input('username', sql.NVarChar, username);
+        request.input('password', sql.NVarChar, hashedPassword);
+        request.input('email', sql.NVarChar, email);
+        request.input('role', sql.NVarChar, role);
+        await request.query(query);
+
+        // Повернення відповіді про успішну реєстрацію
+        res.status(201).json({ message: 'Реєстрація успішна' });
+    } catch (err) {
+        // Обробка помилок сервера
+        res.status(500).json({ message: `Помилка сервера: ${err.message}` });
+    }
+});
+
+/**
+ * @swagger
+ * /api/login:
+ *   post:
+ *     summary: Авторизація користувача
+ *     tags: [Auth]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               username:
+ *                 type: string
+ *               password:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: Авторизація успішна
+ */
+// Обробка запиту на авторизацію користувача
+router.post('/login', async (req, res) => {
+    const { username, password } = req.body;
+
+    // Перевірка, чи всі необхідні поля заповнені
+    if (!username || !password) {
+        return res.status(400).json({ message: 'Всі поля обов\'язкові' });
+    }
+
+    try {
+        // Отримання користувача з бази даних за ім'ям
+        const query = `SELECT id, username, password, role FROM Users WHERE username = @username`;
+        const request = new sql.Request();
+        request.input('username', sql.NVarChar, username);
+        const result = await request.query(query);
+
+        // Перевірка, чи користувач знайдений
+        if (result.recordset.length === 0) {
+            return res.status(401).json({ message: 'Невірний логін або пароль' });
+        }
+
+        const user = result.recordset[0];
+
+        // Перевірка правильності пароля
+        const isPasswordValid = await bcrypt.compare(password, user.password);
+        if (!isPasswordValid) {
+            return res.status(401).json({ message: 'Невірний логін або пароль' });
+        }
+
+        // Повернення повідомлення про успішну авторизацію
+        res.json({ message: 'Авторизація успішна' });
+    } catch (err) {
+        // Обробка помилок сервера
+        res.status(500).json({ message: `Помилка сервера: ${err.message}` });
+    }
+});
+
+// Експорт роутера для використання в основному додатку
+module.exports = router;
+
+Посилання на відео: https://youtu.be/FioMC2utVcI
